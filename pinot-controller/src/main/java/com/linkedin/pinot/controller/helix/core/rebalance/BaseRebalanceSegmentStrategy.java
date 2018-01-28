@@ -21,8 +21,11 @@ import com.linkedin.pinot.common.utils.helix.HelixHelper;
 import com.linkedin.pinot.common.utils.retry.RetryPolicies;
 import java.util.Map;
 import javax.annotation.Nullable;
+import org.apache.helix.HelixAdmin;
 import org.apache.helix.HelixManager;
+import org.apache.helix.ZNRecord;
 import org.apache.helix.model.IdealState;
+import org.apache.helix.store.zk.ZkHelixPropertyStore;
 
 
 /**
@@ -30,10 +33,18 @@ import org.apache.helix.model.IdealState;
  */
 public abstract class BaseRebalanceSegmentStrategy implements RebalanceSegmentStrategy {
 
-  private HelixManager _helixManager;
+  protected static final boolean DEFAULT_DRY_RUN = true;
+
+  protected HelixManager _helixManager;
+  protected HelixAdmin _helixAdmin;
+  protected String _helixClusterName;
+  protected ZkHelixPropertyStore<ZNRecord> _propertyStore;
 
   BaseRebalanceSegmentStrategy(HelixManager helixManager) {
     _helixManager = helixManager;
+    _helixAdmin = helixManager.getClusterManagmentTool();
+    _helixClusterName = helixManager.getClusterName();
+    _propertyStore = helixManager.getHelixPropertyStore();
   }
 
   /**

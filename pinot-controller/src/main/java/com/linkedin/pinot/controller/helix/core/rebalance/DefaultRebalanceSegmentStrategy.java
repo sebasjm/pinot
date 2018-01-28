@@ -55,20 +55,11 @@ public class DefaultRebalanceSegmentStrategy extends BaseRebalanceSegmentStrateg
 
   private static final Logger LOGGER = LoggerFactory.getLogger(DefaultRebalanceSegmentStrategy.class);
 
-  private static final boolean DEFAULT_DRY_RUN = true;
   private static final boolean DEFAULT_INCLUDE_CONSUMING = false;
 
-  private HelixManager _helixManager;
-  private HelixAdmin _helixAdmin;
-  private String _helixClusterName;
-  private ZkHelixPropertyStore<ZNRecord> _propertyStore;
 
   public DefaultRebalanceSegmentStrategy(HelixManager helixManager) {
     super(helixManager);
-    _helixManager = helixManager;
-    _helixAdmin = helixManager.getClusterManagmentTool();
-    _helixClusterName = helixManager.getClusterName();
-    _propertyStore = helixManager.getHelixPropertyStore();
   }
 
   /**
