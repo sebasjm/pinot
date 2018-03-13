@@ -20,6 +20,8 @@ import com.linkedin.pinot.common.config.PinotTaskConfig;
 import com.linkedin.pinot.common.exception.HttpErrorStatusException;
 import com.linkedin.pinot.common.metadata.segment.SegmentZKMetadataCustomMapModifier;
 import com.linkedin.pinot.common.segment.fetcher.SegmentFetcherFactory;
+import com.linkedin.pinot.common.utils.ClientSSLContextGenerator;
+import com.linkedin.pinot.common.utils.CommonConstants;
 import com.linkedin.pinot.common.utils.FileUploadDownloadClient;
 import com.linkedin.pinot.common.utils.SimpleHttpResponse;
 import com.linkedin.pinot.common.utils.TarGzCompressionUtils;
@@ -35,6 +37,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import javax.annotation.Nonnull;
+import javax.net.ssl.SSLContext;
+import org.apache.commons.configuration.Configuration;
 import org.apache.commons.io.FileUtils;
 import org.apache.http.Header;
 import org.apache.http.HttpHeaders;
@@ -58,6 +62,17 @@ public abstract class BaseSegmentConversionExecutor extends BaseTaskExecutor {
   private static final int DEFAULT_MAX_NUM_ATTEMPTS = 5;
   private static final long DEFAULT_INITIAL_RETRY_DELAY_MS = 1000L; // 1 second
   private static final float DEFAULT_RETRY_SCALE_FACTOR = 2f;
+  private static final String CONFIG_OF_CONTROLLER_HTTPS_ENABLED = "enabled";
+  private static final String HTTPS_PROTOCOL = "https";
+
+  private static SSLContext _sslContext;
+
+  public static void init(Configuration uploaderConfig) {
+    Configuration httpsConfig = uploaderConfig.subset(HTTPS_PROTOCOL);
+    if (httpsConfig.getBoolean(CONFIG_OF_CONTROLLER_HTTPS_ENABLED, false)) {
+      _sslContext = new ClientSSLContextGenerator(httpsConfig.subset(CommonConstants.PREFIX_OF_SSL_SUBSET)).generate();
+    }
+  }
 
   /**
    * Convert the segment based on the given {@link PinotTaskConfig}.
@@ -85,9 +100,8 @@ public abstract class BaseSegmentConversionExecutor extends BaseTaskExecutor {
 
     LOGGER.info("Start executing {} on table: {}, segment: {} with downloadURL: {}, uploadURL: {}", taskType, tableName,
         segmentName, downloadURL, uploadURL);
-
-    File tempDataDir = new File(new File(MINION_CONTEXT.getDataDir(), taskType), "tmp-" + System.nanoTime());
-    Preconditions.checkState(tempDataDir.mkdirs());
+      File tempDataDir = new File(new File(MINION_CONTEXT.getDataDir(), taskType), "tmp-" + System.nanoTime());
+      Preconditions.checkState(tempDataDir.mkdirs());
     try {
       // Download the tarred segment file
       File tarredSegmentFile = new File(tempDataDir, "tarredSegmentFile");
@@ -110,15 +124,13 @@ public abstract class BaseSegmentConversionExecutor extends BaseTaskExecutor {
       // Tar the converted segment
       File convertedTarredSegmentDir = new File(tempDataDir, "convertedTarredSegmentDir");
       Preconditions.checkState(convertedTarredSegmentDir.mkdir());
-      final File convertedTarredSegmentFile = new File(
-          TarGzCompressionUtils.createTarGzOfDirectory(convertedIndexDir.getPath(),
-              new File(convertedTarredSegmentDir, segmentName).getPath()));
+      final File convertedTarredSegmentFile = new File(TarGzCompressionUtils.createTarGzOfDirectory(convertedIndexDir.getPath(),
+          new File(convertedTarredSegmentDir, segmentName).getPath()));
 
       // Check whether the task get cancelled before uploading the segment
       if (_cancelled) {
         LOGGER.info("{} on table: {}, segment: {} got cancelled", taskType, tableName, segmentName);
-        throw new TaskCancelledException(
-            taskType + " on table: " + tableName + ", segment: " + segmentName + " got cancelled");
+        throw new TaskCancelledException(taskType + " on table: " + tableName + ", segment: " + segmentName + " got cancelled");
       }
 
       // Set original segment CRC into HTTP IF-MATCH header to check whether the original segment get refreshed, so that
@@ -128,9 +140,8 @@ public abstract class BaseSegmentConversionExecutor extends BaseTaskExecutor {
       // NOTE: even segment is not changed, still need to upload the segment to update the segment ZK metadata so that
       // segment will not be submitted again
       SegmentZKMetadataCustomMapModifier segmentZKMetadataCustomMapModifier = getSegmentZKMetadataCustomMapModifier();
-      Header segmentZKMetadataCustomMapModifierHeader =
-          new BasicHeader(FileUploadDownloadClient.CustomHeaders.SEGMENT_ZK_METADATA_CUSTOM_MAP_MODIFIER,
-              segmentZKMetadataCustomMapModifier.toJsonString());
+      Header segmentZKMetadataCustomMapModifierHeader = new BasicHeader(FileUploadDownloadClient.CustomHeaders.SEGMENT_ZK_METADATA_CUSTOM_MAP_MODIFIER,
+          segmentZKMetadataCustomMapModifier.toJsonString());
       final List<Header> httpHeaders = Arrays.asList(ifMatchHeader, segmentZKMetadataCustomMapModifierHeader);
 
       // Set query parameters
@@ -138,47 +149,47 @@ public abstract class BaseSegmentConversionExecutor extends BaseTaskExecutor {
           new BasicNameValuePair(FileUploadDownloadClient.QueryParameters.ENABLE_PARALLEL_PUSH_PROTECTION, "true"));
 
       String maxNumAttemptsConfig = configs.get(MinionConstants.MAX_NUM_ATTEMPTS_KEY);
-      int maxNumAttempts =
-          maxNumAttemptsConfig != null ? Integer.parseInt(maxNumAttemptsConfig) : DEFAULT_MAX_NUM_ATTEMPTS;
+      int maxNumAttempts = maxNumAttemptsConfig != null ? Integer.parseInt(maxNumAttemptsConfig) : DEFAULT_MAX_NUM_ATTEMPTS;
       String initialRetryDelayMsConfig = configs.get(MinionConstants.INITIAL_RETRY_DELAY_MS_KEY);
-      long initialRetryDelayMs = initialRetryDelayMsConfig != null ? Long.parseLong(initialRetryDelayMsConfig)
-          : DEFAULT_INITIAL_RETRY_DELAY_MS;
+      long initialRetryDelayMs = initialRetryDelayMsConfig != null ? Long.parseLong(initialRetryDelayMsConfig) : DEFAULT_INITIAL_RETRY_DELAY_MS;
       String retryScaleFactorConfig = configs.get(MinionConstants.RETRY_SCALE_FACTOR_KEY);
-      float retryScaleFactor =
-          retryScaleFactorConfig != null ? Float.parseFloat(retryScaleFactorConfig) : DEFAULT_RETRY_SCALE_FACTOR;
+      float retryScaleFactor = retryScaleFactorConfig != null ? Float.parseFloat(retryScaleFactorConfig) : DEFAULT_RETRY_SCALE_FACTOR;
       RetryPolicy retryPolicy =
           RetryPolicies.exponentialBackoffRetryPolicy(maxNumAttempts, initialRetryDelayMs, retryScaleFactor);
 
-      try (FileUploadDownloadClient fileUploadDownloadClient = new FileUploadDownloadClient()) {
-        retryPolicy.attempt(new Callable<Boolean>() {
-          @Override
-          public Boolean call() throws Exception {
-            try {
-              SimpleHttpResponse response =
-                  fileUploadDownloadClient.uploadSegment(new URI(uploadURL), segmentName, convertedTarredSegmentFile,
-                      httpHeaders, parameters, FileUploadDownloadClient.DEFAULT_SOCKET_TIMEOUT_MS);
-              LOGGER.info("Got response {}: {} while uploading table: {}, segment: {} with uploadURL: {}",
-                  response.getStatusCode(), response.getResponse(), tableName, segmentName, uploadURL);
-              return true;
-            } catch (HttpErrorStatusException e) {
-              int statusCode = e.getStatusCode();
-              if (statusCode == HttpStatus.SC_CONFLICT || statusCode >= 500) {
-                // Temporary exception
-                LOGGER.warn("Caught temporary exception while uploading segment: {}, will retry", segmentName, e);
-                return false;
-              } else {
-                // Permanent exception
-                LOGGER.error("Caught permanent exception while uploading segment: {}, won't retry", segmentName, e);
-                throw e;
-              }
-            } catch (Exception e) {
-              LOGGER.warn("Caught temporary exception while uploading segment: {}, will retry", segmentName, e);
-              return false;
-            }
-          }
-        });
+      final FileUploadDownloadClient fileUploadDownloadClient;
+      if (_sslContext != null) {
+        fileUploadDownloadClient = new FileUploadDownloadClient(_sslContext);
+      } else {
+        fileUploadDownloadClient = new FileUploadDownloadClient();
       }
 
+      retryPolicy.attempt(new Callable<Boolean>() {
+        @Override
+        public Boolean call() throws Exception {
+          try {
+            SimpleHttpResponse response =
+                fileUploadDownloadClient.uploadSegment(new URI(uploadURL), segmentName, convertedTarredSegmentFile,
+                    httpHeaders, parameters, FileUploadDownloadClient.DEFAULT_SOCKET_TIMEOUT_MS);
+            LOGGER.info("Got response {}: {} while uploading table: {}, segment: {} with uploadURL: {}", response.getStatusCode(), response.getResponse(), tableName, segmentName, uploadURL);
+            return true;
+          } catch (HttpErrorStatusException e) {
+            int statusCode = e.getStatusCode();
+            if (statusCode == HttpStatus.SC_CONFLICT || statusCode >= 500) {
+              // Temporary exception
+              LOGGER.warn("Caught temporary exception while uploading segment: {}, will retry", segmentName, e);
+              return false;
+            } else {
+              // Permanent exception
+              LOGGER.error("Caught permanent exception while uploading segment: {}, won't retry", segmentName, e);
+              throw e;
+            }
+          } catch (Exception e) {
+            LOGGER.warn("Caught temporary exception while uploading segment: {}, will retry", segmentName, e);
+            return false;
+          }
+        }
+      });
       LOGGER.info("Done executing {} on table: {}, segment: {}", taskType, tableName, segmentName);
     } finally {
       FileUtils.deleteQuietly(tempDataDir);
