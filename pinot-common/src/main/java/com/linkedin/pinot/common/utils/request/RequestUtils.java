@@ -177,12 +177,11 @@ public class RequestUtils {
       if (groupByExpressions != null) {
         for (String expression : groupByExpressions) {
           TransformExpressionTree expressionTree = PQL2_COMPILER.compileToExpressionTree(expression);
-          List<String> columns = new ArrayList<>();
-          expressionTree.getColumns(columns);
-          allGroupByColumns.addAll(columns);
+          expressionTree.getColumns(allGroupByColumns);
         }
       }
     }
+
     return allGroupByColumns;
   }
 
